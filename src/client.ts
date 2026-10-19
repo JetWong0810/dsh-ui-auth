@@ -151,18 +151,18 @@
 		interface ChangeEventLike {
 			target: { value: string }
 		}
-		/** settings.section 注册项。 */
+		/** slots 注册项：settings.section 要 label，sidebar.footer.action 不要。 */
 		interface SettingsSectionOptions {
 			name: string
 			id: string
 			order: number
 			priority?: number
-			label: () => string
+			label?: () => string
 		}
 		/** 客户端 slots 服务（本文件只用这两个方法）。 */
 		interface SlotsService {
 			inject(name: string, callback: () => void): void
-			register(options: SettingsSectionOptions, render: () => unknown): unknown
+			register(options: SettingsSectionOptions, render: (props?: { wide?: boolean }) => unknown): unknown
 		}
 		/** Cordis 插件上下文（本文件只用 `ctx.get`）。 */
 		interface PluginContext {
@@ -1503,6 +1503,130 @@
 			}
 		}
 
+		/**
+		 * 侧栏底部账号入口：头像 + 昵称，点开向上弹出「设置」「退出登录」。
+		 * 设置项复用侧栏现有设置按钮（找到 DOM 节点触发点击，该按钮由本组件的样式隐藏但保留），
+		 * 退出项与登录页一致：POST /auth/logout 后跳登录页。
+		 */
+		function AccountMenuSidebar(props?: { wide?: boolean }) {
+			var wide = props === undefined || props.wide !== false
+			var meS = React.useState(null as string | null), me = meS[0], setMe = meS[1]
+			var openS = React.useState(false), open = openS[0], setOpen = openS[1]
+			var posS = React.useState(null as { left: number; bottom: number } | null), pos = posS[0], setPos = posS[1]
+			var rootRef = React.useRef(null as HTMLElement | null)
+			var menuRef = React.useRef(null as HTMLElement | null)
+			React.useEffect(function () {
+				var cancelled = false
+				rpc('me', {}).then(function (j: RpcResult) {
+					if (cancelled || j.me === undefined) return
+					var display = String(j.me.displayName || '').trim()
+					var login = String(j.me.username || '').trim()
+					setMe(display === '' ? login : display)
+				}).catch(function () { /* 401 已由 rpc 引导回登录页 */ })
+				return function () { cancelled = true }
+			}, [])
+			React.useEffect(function () {
+				var style = document.getElementById('auth-account-menu-css')
+				if (style === null) {
+					style = document.createElement('style')
+					style.id = 'auth-account-menu-css'
+					document.head.appendChild(style)
+				}
+				style.textContent = '[data-slot="settings.launcher"]{display:none!important}'
+			}, [])
+			React.useEffect(function () {
+				if (!open) return
+				function onDown(event: Event) {
+					var target = event.target as Node
+					var inMenu = menuRef.current !== null && menuRef.current.contains(target)
+					var inRoot = rootRef.current !== null && rootRef.current.contains(target)
+					if (!inMenu && !inRoot) setOpen(false)
+				}
+				function onKey(event: KeyboardEvent) { if (event.key === 'Escape') setOpen(false) }
+				function onResize() { setOpen(false) }
+				document.addEventListener('mousedown', onDown, true)
+				document.addEventListener('keydown', onKey, true)
+				window.addEventListener('resize', onResize)
+				return function () {
+					document.removeEventListener('mousedown', onDown, true)
+					document.removeEventListener('keydown', onKey, true)
+					window.removeEventListener('resize', onResize)
+				}
+			}, [open])
+			if (me === null) return null
+			var title = '当前账号：' + me
+			function toggle() {
+				if (open) { setOpen(false); return }
+				if (rootRef.current === null) return
+				var rect = rootRef.current.getBoundingClientRect()
+				var width = 180
+				setPos({
+					left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+					bottom: window.innerHeight - rect.top + 6,
+				})
+				setOpen(true)
+			}
+			function openSettings() {
+				setOpen(false)
+				var button = document.querySelector('[data-slot="settings.launcher"] button[aria-haspopup="dialog"]') as HTMLElement | null
+				if (button === null) { console.error('[dsh-ui-auth] 设置按钮未找到'); return }
+				button.click()
+			}
+			function logout() {
+				setOpen(false)
+				fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' }).finally(function () {
+					location.href = '/auth/login'
+				})
+			}
+			var itemStyle = {
+				display: 'block', width: '100%', padding: '7px 10px', border: 'none', borderRadius: '7px',
+				background: 'transparent', color: 'inherit', font: 'inherit', fontSize: '13px', lineHeight: '18px',
+				textAlign: 'left', whiteSpace: 'nowrap', cursor: 'pointer',
+			}
+			var avatar = React.createElement('span', {
+				'aria-hidden': 'true',
+				style: {
+					width: '24px', height: '24px', borderRadius: '50%', background: 'rgba(127,127,127,.16)',
+					border: '1px solid rgba(127,127,127,.24)', display: 'inline-flex', alignItems: 'center',
+					justifyContent: 'center', flex: 'none',
+				},
+			}, React.createElement('svg', {
+				width: '15', height: '15', viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor',
+				strokeWidth: '1.3', 'aria-hidden': 'true',
+			}, React.createElement('circle', { cx: '8', cy: '5.7', r: '2.6' }), React.createElement('path', { d: 'M3 13.2c0-2.3 2.2-4 5-4s5 1.7 5 4' })))
+			var trigger = React.createElement('button', {
+				type: 'button', title: title, 'aria-label': title, 'aria-haspopup': 'menu', 'aria-expanded': open,
+				onClick: toggle,
+				style: {
+					display: 'flex', alignItems: 'center', gap: wide ? '8px' : '0',
+					justifyContent: wide ? 'flex-start' : 'center', width: wide ? '100%' : '28px', height: '28px',
+					minWidth: 0, padding: wide ? '0 4px' : '0', border: 'none', borderRadius: '8px',
+					background: open ? 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,.16))' : 'transparent',
+					color: 'inherit', font: 'inherit', fontSize: '13px', cursor: 'pointer',
+				},
+			}, avatar, wide ? React.createElement('span', {
+				style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' },
+			}, me) : null)
+			var menu = open && pos !== null ? React.createElement('div', {
+				ref: menuRef, role: 'menu', 'data-auth-account-menu': '',
+				style: {
+					position: 'fixed', left: pos.left + 'px', bottom: pos.bottom + 'px', width: '180px', zIndex: 2147483000,
+					display: 'flex', flexDirection: 'column', gap: '2px', padding: '4px', boxSizing: 'border-box',
+					background: 'var(--dsw-alias-bg-layer-1, #ffffff)',
+					border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.3))',
+					borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,.18)',
+				},
+			},
+				React.createElement('button', { type: 'button', role: 'menuitem', onClick: openSettings, style: itemStyle }, '设置'),
+				React.createElement('button', { type: 'button', role: 'menuitem', onClick: logout, style: itemStyle }, '退出登录'),
+			) : null
+			return React.createElement('div', {
+				ref: rootRef,
+				style: { width: wide ? '100%' : '28px', minWidth: 0, flex: wide ? '1 1 auto' : 'none' },
+			}, trigger, menu)
+		}
+
+
 		exports.inject = ['slots']
 		exports.apply = function apply(ctx: PluginContext) {
 			// 与 DSH 的 locale 服务联动：注册我们的词典并用它的 t（含 en 回退链与 {name} 插值）。
@@ -1538,6 +1662,13 @@
 				return slots!.register(
 					{ name: 'settings.section', id: 'auth-users', order: 30, label: function () { return '用户管理' } },
 					function () { return React.createElement(AuthUsersPage) },
+				)
+			})
+			// 侧栏底部账号入口（头像 + 昵称 + 弹出菜单）
+			slots.inject('sidebar.footer.action', function () {
+				return slots!.register(
+					{ name: 'sidebar.footer.action', id: 'auth-account-menu', order: 10 },
+					AccountMenuSidebar,
 				)
 			})
 			// 普通用户：模型页改为**自己的**模型与 Key 面板（v0.7.0；不再隐藏出厂导航行）
